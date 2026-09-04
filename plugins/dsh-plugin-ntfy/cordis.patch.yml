@@ -1,0 +1,7 @@
+# Bundle patch for dsh-plugin-ntfy. The host applies this when the plugin is
+# installed, inserting one plugin instance under the id `ntfy-notify`.
+# Runtime settings (server/topic/toggles) come from the `dsh-plugin-ntfy`
+# settings namespace (settings.yaml + Settings → Plugins → ntfy), not from here.
+- insert:
+    - id: ntfy-notify
+      name: dsh-plugin-ntfy
