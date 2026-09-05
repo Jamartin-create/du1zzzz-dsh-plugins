@@ -1,11 +1,12 @@
 import { join } from 'path'
+import { homedir } from 'os'
 import { NpmDatabase } from './sqlite'
 import { DataSource } from './data-source'
 import { SyncManager } from './sync'
 import { PublishManager } from './publish'
 import { registerTools } from './tool'
 import { registerRoutes } from './routes'
-import { SettingsSchema, DEFAULT_CONFIG, type NpmConfig } from './config'
+import { SettingsSchema, DEFAULT_CONFIG, DEFAULT_REGISTRY, type NpmConfig } from './config'
 
 export const name = 'dsh-plugin-npm'
 export const inject = ['tools']
@@ -25,20 +26,31 @@ const NPM_GUIDANCE = [
  * dsh-plugin-npm — manage npm packages from DeepSeek Harness.
  *
  * - registers npm_* tools for the agent;
- * - provides a settings namespace for registry configuration;
+ * - provides a settings namespace for sync/publish configuration;
  * - syncs remote packages to SQLite cache;
  * - manages local packages with validation and publishing;
  * - adds a sidebar button and overlay UI for package management.
+ *
+ * registries 的唯一真实来源是 sqlite registries 表（通过 /registries 路由管理）。
  */
 export function apply(ctx: any) {
   let settings: NpmConfig = DEFAULT_CONFIG
   const getConfig = () => settings
 
   // 数据目录（使用 DSH 的数据目录）
-  const dataDir = join(process.env.HOME || '~', '.dsh', 'plugins', 'dsh-plugin-npm')
+  const dataDir = join(homedir(), '.dsh', 'plugins', 'dsh-plugin-npm')
 
   // 初始化数据库
   const db = new NpmDatabase(join(dataDir, 'npm.db'))
+
+  // 首次启动：registries 表为空时写入默认 npmjs registry
+  if (db.getRegistries().length === 0) {
+    try {
+      db.upsertRegistry(DEFAULT_REGISTRY)
+    } catch (error: any) {
+      ctx.logger?.warn?.('dsh-plugin-npm: 写入默认 registry 失败:', error.message)
+    }
+  }
 
   // 初始化数据源
   const dataSource = new DataSource()
@@ -93,12 +105,12 @@ export function apply(ctx: any) {
     db,
     syncManager,
     publishManager,
-    config: settings,
+    getConfig,
     logger: ctx.logger,
   })
 
   // 启动自动同步（延迟执行，等待 settings 加载）
-  setTimeout(() => {
+  const autoSyncTimer = setTimeout(() => {
     if (settings.autoSync.enabled) {
       syncManager.startAutoSync()
     }
@@ -106,6 +118,7 @@ export function apply(ctx: any) {
 
   // 清理
   ctx.on('dispose', () => {
+    clearTimeout(autoSyncTimer)
     syncManager.stopAutoSync()
     db.close()
   })

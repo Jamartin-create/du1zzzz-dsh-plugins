@@ -1,5 +1,8 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { mkdtemp, writeFile, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import type { NpmViewResult } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -8,6 +11,11 @@ export interface NpmCliOptions {
   registry?: string
   cwd?: string
   authToken?: string
+}
+
+interface ExecOptions {
+  timeout: number
+  cwd?: string
 }
 
 export class NpmCli {
@@ -46,12 +54,9 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
     try {
-      const { stdout } = await execFileAsync(this.npmPath, args, {
+      const { stdout } = await this.run(args, options, {
         timeout: 10000,
-        env,
         cwd: options.cwd,
       })
       return stdout.trim()
@@ -75,12 +80,9 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
     try {
-      const { stdout } = await execFileAsync(this.npmPath, args, {
+      const { stdout } = await this.run(args, options, {
         timeout: 15000,
-        env,
         cwd: options.cwd,
       })
 
@@ -107,11 +109,8 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
-    const { stdout } = await execFileAsync(this.npmPath, args, {
+    const { stdout } = await this.run(args, options, {
       timeout: 15000,
-      env,
       cwd: options.cwd,
     })
 
@@ -127,16 +126,15 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
-    const { stdout } = await execFileAsync(this.npmPath, args, {
+    const { stdout } = await this.run(args, options, {
       timeout: 60000,
       cwd: packagePath,
-      env,
     })
 
     // 输出格式为文件名，如 "package-name-1.0.0.tgz"
-    return stdout.trim()
+    // npm 可能在 filename 前后打印额外行，取最后一行
+    const lines = stdout.trim().split('\n').filter(Boolean)
+    return lines[lines.length - 1].trim()
   }
 
   /**
@@ -157,13 +155,10 @@ export class NpmCli {
       args.push('--otp', options.otp)
     }
 
-    const env = this.buildEnv(options)
-
     try {
-      await execFileAsync(this.npmPath, args, {
+      await this.run(args, options, {
         timeout: 120000,
         cwd: packagePath,
-        env,
       })
     } catch (error: any) {
       if (error.stderr?.includes('ENEEDAUTH')) {
@@ -192,12 +187,9 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
     try {
-      await execFileAsync(this.npmPath, args, {
+      await this.run(args, options, {
         timeout: 30000,
-        env,
       })
     } catch (error: any) {
       if (error.stderr?.includes('ENEEDAUTH')) {
@@ -220,11 +212,8 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
-    await execFileAsync(this.npmPath, args, {
+    await this.run(args, options, {
       timeout: 15000,
-      env,
     })
   }
 
@@ -241,29 +230,55 @@ export class NpmCli {
       args.push('--registry', options.registry)
     }
 
-    const env = this.buildEnv(options)
-
-    await execFileAsync(this.npmPath, args, {
+    await this.run(args, options, {
       timeout: 15000,
-      env,
     })
   }
 
   /**
-   * 构建环境变量
+   * 执行 npm 命令。若提供了 authToken，写入一个一次性的临时 userconfig
+   * （绝不修改用户的真实 .npmrc），命令结束后删除临时文件。
    */
-  private buildEnv(options: NpmCliOptions): NodeJS.ProcessEnv {
-    const env = { ...process.env }
+  private async run(
+    args: string[],
+    options: NpmCliOptions,
+    execOptions: ExecOptions,
+  ): Promise<{ stdout: string; stderr: string }> {
+    let finalArgs = args
+    let tempDir: string | undefined
 
     if (options.authToken) {
-      // 设置 auth token 到环境变量
-      // npm 会从 NPM_TOKEN 或 npm_config_//registry/:_authToken 读取
-      const registry = options.registry || 'https://registry.npmjs.org/'
-      const normalizedUrl = registry.endsWith('/') ? registry : `${registry}/`
-      env[`npm_config_${normalizedUrl}_authToken`] = options.authToken
-      env['NPM_TOKEN'] = options.authToken
+      const prepared = await this.createUserConfig(options)
+      finalArgs = [...args, '--userconfig', prepared.file]
+      tempDir = prepared.dir
     }
 
-    return env
+    try {
+      return await execFileAsync(this.npmPath, finalArgs, {
+        ...execOptions,
+        env: { ...process.env },
+      })
+    } finally {
+      if (tempDir) {
+        await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+      }
+    }
+  }
+
+  /**
+   * 为单次调用创建临时 userconfig，内容形如：
+   *   //registry.npmjs.org/:_authToken=<token>
+   * host 部分为 registry URL 去掉协议、保留结尾斜杠后的部分。
+   */
+  private async createUserConfig(options: NpmCliOptions): Promise<{ dir: string; file: string }> {
+    const registry = options.registry || 'https://registry.npmjs.org/'
+    const normalized = registry.endsWith('/') ? registry : `${registry}/`
+    const host = normalized.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+    const content = `//${host}:_authToken=${options.authToken}\n`
+
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-plugin-npm-'))
+    const file = join(dir, '.npmrc')
+    await writeFile(file, content, { mode: 0o600 })
+    return { dir, file }
   }
 }

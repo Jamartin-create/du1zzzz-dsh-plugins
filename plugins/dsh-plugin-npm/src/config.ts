@@ -1,6 +1,6 @@
 import z from "@deepseek-ai/schemastery"
 
-/** Registry 配置 */
+/** Registry 配置（存储于 sqlite registries 表，见 sqlite.ts） */
 export interface RegistryConfigInput {
   id: string
   name: string
@@ -17,24 +17,12 @@ export interface AutoSyncConfig {
   intervalMs: number
 }
 
-/** 插件配置 */
+/** 插件配置（registries 不在此处——唯一的真实来源是 sqlite registries 表） */
 export interface NpmConfig {
-  registries: RegistryConfigInput[]
   autoSync: AutoSyncConfig
   sourcePriority: 'cli-first' | 'api-first' | 'cache-only'
   defaultPublishTag: string
 }
-
-/** Registry schema */
-const RegistrySchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  url: z.string().default('https://registry.npmjs.org/'),
-  scope: z.string(),
-  authToken: z.string(),
-  isDefault: z.boolean().default(false),
-  syncEnabled: z.boolean().default(true),
-})
 
 /** 自动同步 schema */
 const AutoSyncSchema = z.object({
@@ -44,17 +32,6 @@ const AutoSyncSchema = z.object({
 
 /** Settings-namespace schema */
 export const SettingsSchema: any = z.object({
-  registries: z.array(RegistrySchema).default([
-    {
-      id: 'npmjs',
-      name: 'npmjs',
-      url: 'https://registry.npmjs.org/',
-      scope: '',
-      authToken: '',
-      isDefault: true,
-      syncEnabled: true,
-    },
-  ]),
   autoSync: AutoSyncSchema.default({
     enabled: true,
     intervalMs: 1_800_000,
@@ -69,19 +46,19 @@ export const SettingsSchema: any = z.object({
 
 /** 默认配置 */
 export const DEFAULT_CONFIG: NpmConfig = {
-  registries: [
-    {
-      id: 'npmjs',
-      name: 'npmjs',
-      url: 'https://registry.npmjs.org/',
-      isDefault: true,
-      syncEnabled: true,
-    },
-  ],
   autoSync: {
     enabled: true,
     intervalMs: 1_800_000,
   },
   sourcePriority: 'cli-first',
   defaultPublishTag: 'latest',
+}
+
+/** 首次启动时写入数据库的默认 registry */
+export const DEFAULT_REGISTRY: RegistryConfigInput = {
+  id: 'npmjs',
+  name: 'npmjs',
+  url: 'https://registry.npmjs.org/',
+  isDefault: true,
+  syncEnabled: true,
 }

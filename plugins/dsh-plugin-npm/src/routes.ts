@@ -10,7 +10,7 @@ interface RouteContext {
   db: NpmDatabase
   syncManager: SyncManager
   publishManager: PublishManager
-  config: NpmConfig
+  getConfig: () => NpmConfig
   logger: any
 }
 
@@ -18,7 +18,7 @@ interface RouteContext {
  * 注册 Web API 路由
  */
 export function registerRoutes(ctx: any, routeCtx: RouteContext) {
-  const { db, syncManager, publishManager, config, logger } = routeCtx
+  const { db, syncManager, publishManager, getConfig } = routeCtx
 
   // ========== 远端包 ==========
 
@@ -59,7 +59,7 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
             const registryId = url.searchParams.get('registryId')
 
             if (registryId) {
-              const registry = config.registries.find(r => r.id === registryId)
+              const registry = db.getRegistry(registryId)
               if (!registry) {
                 res.writeHead(404)
                 res.end(JSON.stringify({ error: 'registry 不存在' }))
@@ -446,7 +446,7 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
           try {
             const url = new URL(req.url ?? '/', 'http://localhost')
             const localPackageId = url.searchParams.get('localPackageId') || undefined
-            const limit = parseInt(url.searchParams.get('limit') || '50')
+            const limit = parseLimit(url.searchParams.get('limit'), 50)
             const logs = db.getPublishLogs(localPackageId, limit)
             res.writeHead(200)
             res.end(JSON.stringify({ logs }))
@@ -473,7 +473,7 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
           try {
             const url = new URL(req.url ?? '/', 'http://localhost')
             const registryId = url.searchParams.get('registryId') || undefined
-            const limit = parseInt(url.searchParams.get('limit') || '20')
+            const limit = parseLimit(url.searchParams.get('limit'), 20)
             const logs = db.getSyncLogs(registryId, limit)
             res.writeHead(200)
             res.end(JSON.stringify({ logs }))
@@ -498,4 +498,12 @@ function readBody(req: any): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
     req.on('error', reject)
   })
+}
+
+/**
+ * 解析正整数分页参数；非法输入回退到默认值
+ */
+function parseLimit(raw: string | null, fallback: number): number {
+  const n = Number.parseInt(raw ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
 }

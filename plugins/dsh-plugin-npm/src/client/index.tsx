@@ -15,6 +15,7 @@ interface RemotePackage {
   license: string
   homepage?: string
   repository?: string
+  registryId: string
   downloadsWeekly: number
   downloadsMonthly: number
   updatedAt: string
@@ -33,16 +34,6 @@ interface LocalPackage {
   lastValidatedAt?: string
   createdAt: string
   updatedAt: string
-}
-
-interface RegistryConfig {
-  id: string
-  name: string
-  url: string
-  scope?: string
-  authToken?: string
-  isDefault: boolean
-  syncEnabled: boolean
 }
 
 interface ValidationResult {
@@ -206,13 +197,19 @@ const dangerBtn: CSSProperties = {
 
 // ========== API Helpers ==========
 
+interface FetchError extends Error {
+  data?: any
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options)
+  const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}))
-    throw new Error(data.error || `请求失败: ${res.status}`)
+    const err = new Error(data.error || `请求失败: ${res.status}`) as FetchError
+    err.data = data
+    throw err
   }
-  return res.json()
+  return data as T
 }
 
 // ========== Main Component ==========
@@ -277,11 +274,22 @@ function RemotePackagesTab() {
     setSyncing(true)
     setError('')
     try {
-      const result = await fetchJson<SyncResult>('/plugins/dsh-plugin-npm/sync')
-      if (result.success) {
-        await loadPackages()
+      // sync-all 返回 { results: SyncResult[] }；单 registry 返回裸 SyncResult
+      const data = await fetchJson<{ results?: SyncResult[] } & Partial<SyncResult>>(
+        '/plugins/dsh-plugin-npm/sync',
+      )
+      const results: SyncResult[] = Array.isArray(data.results)
+        ? data.results
+        : typeof data.success === 'boolean'
+          ? [data as SyncResult]
+          : []
+      const failed = results.filter(r => !r.success)
+      if (failed.length > 0) {
+        setError(failed.map(f => f.error || `${f.registryId} 同步失败`).join('; '))
+      } else if (results.length === 0) {
+        setError('没有启用同步的 registry')
       } else {
-        setError(result.error || '同步失败')
+        await loadPackages()
       }
     } catch (err: any) {
       setError(err.message)
@@ -328,7 +336,7 @@ function RemotePackagesTab() {
           </thead>
           <tbody>
             {packages.map((pkg) => (
-              <tr key={pkg.name}>
+              <tr key={`${pkg.registryId}:${pkg.name}`}>
                 <td>
                   <a
                     href={`https://www.npmjs.com/package/${pkg.name}`}
@@ -409,6 +417,10 @@ function LocalPackagesTab() {
         await loadPackages()
       }
     } catch (err: any) {
+      // 服务器在 400 中附带完整 validation，展示具体错误/警告
+      if (err.data?.validation) {
+        setValidation(err.data.validation)
+      }
       setError(err.message)
     } finally {
       setAdding(false)
@@ -419,7 +431,7 @@ function LocalPackagesTab() {
     if (!confirm('确定要删除这个本地包吗？')) return
 
     try {
-      await fetchJson(`/plugins/dsh-plugin-npm/packages/local/delete?id=${id}`)
+      await fetchJson(`/plugins/dsh-plugin-npm/packages/local/delete?id=${encodeURIComponent(id)}`)
       await loadPackages()
     } catch (err: any) {
       setError(err.message)
@@ -429,7 +441,7 @@ function LocalPackagesTab() {
   const handleValidate = async (id: string) => {
     try {
       const data = await fetchJson<{ package: LocalPackage; validation: ValidationResult }>(
-        `/plugins/dsh-plugin-npm/packages/local/validate?id=${id}`,
+        `/plugins/dsh-plugin-npm/packages/local/validate?id=${encodeURIComponent(id)}`,
       )
       await loadPackages()
       alert(data.validation.valid ? '验证通过' : `验证失败: ${data.validation.errors.join(', ')}`)
@@ -607,26 +619,12 @@ function NpmSettingsSection(props: any) {
         </p>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Registry 配置</h3>
-        {v.registries.map((registry: RegistryConfig, index: number) => (
-          <div key={registry.id} style={{ padding: 12, background: 'var(--dsw-alias-bg-layer-1, #f5f5f5)', borderRadius: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ fontWeight: 600 }}>{registry.name}</div>
-              {registry.isDefault && (
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-state-business-primary, #1a6ff5)' }}>默认</span>
-              )}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary, #666)' }}>
-              {registry.url}
-            </div>
-            {registry.scope && (
-              <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #999)', marginTop: 4 }}>
-                Scope: {registry.scope}
-              </div>
-            )}
-          </div>
-        ))}
+        <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary, #666)' }}>
+          Registry 通过 /plugins/dsh-plugin-npm/registries API 管理（存储在插件数据库中），
+          不在此处配置。
+        </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -666,6 +664,28 @@ function NpmSettingsSection(props: any) {
         </select>
         <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #999)' }}>
           CLI 优先：优先使用 npm CLI，不可用时回退到 HTTP API
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>默认发布 Tag</h3>
+        <input
+          type="text"
+          value={v.defaultPublishTag}
+          onChange={(e) => set('defaultPublishTag')(e.target.value)}
+          placeholder="latest"
+          style={{
+            padding: '6px 10px',
+            fontSize: 13,
+            borderRadius: 6,
+            border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+            background: 'var(--dsw-alias-bg-layer-2, #fff)',
+            color: 'var(--dsw-alias-label-primary, #111)',
+            maxWidth: 240,
+          }}
+        />
+        <div style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #999)' }}>
+          发布时未指定 tag 时使用的默认 dist-tag（通常为 latest）
         </div>
       </div>
     </div>
