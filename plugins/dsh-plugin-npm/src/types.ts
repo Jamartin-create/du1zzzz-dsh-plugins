@@ -112,10 +112,7 @@ export interface NpmSearchResult {
         npm?: string
       }
     }
-    downloads: {
-      weekly: number
-      monthly: number
-    }
+    // 注意：npm 的 /-/v1/search 响应不包含下载量字段
   }>
   total: number
   time: string

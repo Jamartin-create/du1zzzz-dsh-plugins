@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto'
 import { join } from 'path'
+import { rm } from 'fs/promises'
 import { NpmDatabase } from './sqlite'
 import { DataSource } from './data-source'
 import { validateLocalPackage, readPackageJson } from './validator'
-import type { NpmConfig, RegistryConfigInput } from './config'
-import type { LocalPackage, PublishLog } from './types'
+import type { NpmConfig } from './config'
+import type { LocalPackage, PublishLog, RegistryConfig } from './types'
 
 export interface PublishOptions {
   localPackageId: string
@@ -112,6 +113,8 @@ export class PublishManager {
       }
     }
 
+    let tarballPath: string | undefined
+
     try {
       // 打包
       this.logger?.info?.(`dsh-plugin-npm: 开始打包 ${pkgJson.name}@${pkgJson.version}...`)
@@ -119,7 +122,8 @@ export class PublishManager {
         priority: this.config.sourcePriority,
         registry,
       })
-      publishLog.tarballPath = join(localPkg.path, tarball)
+      tarballPath = join(localPkg.path, tarball)
+      publishLog.tarballPath = tarballPath
 
       // 发布
       this.logger?.info?.(`dsh-plugin-npm: 开始发布 ${pkgJson.name}@${pkgJson.version} 到 ${registry.name}...`)
@@ -130,13 +134,17 @@ export class PublishManager {
         otp,
       })
 
-      // 记录发布日志
-      this.db.addPublishLog(publishLog)
+      // 记录发布日志（日志写入失败不影响已成功的发布结果）
+      this.safeAddPublishLog(publishLog)
 
-      // 更新本地包版本
-      localPkg.version = pkgJson.version
-      localPkg.updatedAt = new Date().toISOString()
-      this.db.updateLocalPackage(localPkg)
+      // 更新本地包版本（失败仅告警，不翻转发布结果）
+      try {
+        localPkg.version = pkgJson.version
+        localPkg.updatedAt = new Date().toISOString()
+        this.db.updateLocalPackage(localPkg)
+      } catch (error: any) {
+        this.logger?.warn?.('dsh-plugin-npm: 更新本地包记录失败:', error.message)
+      }
 
       this.logger?.info?.(`dsh-plugin-npm: 发布成功 ${pkgJson.name}@${pkgJson.version}`)
 
@@ -149,7 +157,7 @@ export class PublishManager {
     } catch (error: any) {
       publishLog.status = 'error'
       publishLog.errorMessage = error.message
-      this.db.addPublishLog(publishLog)
+      this.safeAddPublishLog(publishLog)
 
       this.logger?.warn?.(`dsh-plugin-npm: 发布失败 ${pkgJson.name}:`, error.message)
 
@@ -159,6 +167,11 @@ export class PublishManager {
         version: pkgJson.version,
         registryId: registry.id,
         error: error.message,
+      }
+    } finally {
+      // 清理打包产生的 tarball，避免在用户包目录中累积
+      if (tarballPath) {
+        await rm(tarballPath, { force: true }).catch(() => {})
       }
     }
   }
@@ -172,8 +185,8 @@ export class PublishManager {
     registryId?: string,
   ): Promise<{ success: boolean; error?: string }> {
     const registry = registryId
-      ? this.config.registries.find(r => r.id === registryId)
-      : this.config.registries.find(r => r.isDefault)
+      ? this.db.getRegistry(registryId)
+      : this.db.getDefaultRegistry()
 
     if (!registry) {
       return { success: false, error: '找不到对应的 registry' }
@@ -198,23 +211,34 @@ export class PublishManager {
   }
 
   /**
-   * 解析目标 registry
+   * 解析目标 registry（registries 的唯一真实来源是 sqlite registries 表）
    */
-  private resolveRegistry(localPkg: LocalPackage): RegistryConfigInput | undefined {
+  private resolveRegistry(localPkg: LocalPackage): RegistryConfig | undefined {
     // 1. 优先使用本地包指定的 registry
     if (localPkg.registryId) {
-      const registry = this.config.registries.find(r => r.id === localPkg.registryId)
+      const registry = this.db.getRegistry(localPkg.registryId)
       if (registry) return registry
     }
 
     // 2. 根据 scope 匹配
     if (localPkg.name.startsWith('@')) {
       const scope = localPkg.name.split('/')[0]
-      const registry = this.config.registries.find(r => r.scope === scope)
+      const registry = this.db.getRegistryByScope(scope)
       if (registry) return registry
     }
 
     // 3. 使用默认 registry
-    return this.config.registries.find(r => r.isDefault)
+    return this.db.getDefaultRegistry()
+  }
+
+  /**
+   * 发布日志写入失败不应改变发布结果，仅记录警告
+   */
+  private safeAddPublishLog(log: PublishLog) {
+    try {
+      this.db.addPublishLog(log)
+    } catch (error: any) {
+      this.logger?.warn?.('dsh-plugin-npm: 写入发布记录失败:', error.message)
+    }
   }
 }

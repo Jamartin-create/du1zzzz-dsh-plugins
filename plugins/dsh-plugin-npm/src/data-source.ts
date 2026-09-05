@@ -157,12 +157,12 @@ export class DataSource {
       version: obj.package.version,
       description: obj.package.description || '',
       license: obj.package.license || '',
-      homepage: obj.package.links.homepage,
-      repository: obj.package.links.repository,
+      homepage: obj.package.links?.homepage,
+      repository: obj.package.links?.repository,
       registryId,
       maintainer: username,
-      downloadsWeekly: obj.downloads.weekly,
-      downloadsMonthly: obj.downloads.monthly,
+      downloadsWeekly: 0, // npm search API 不提供下载量
+      downloadsMonthly: 0,
       updatedAt: obj.package.date,
       syncedAt: new Date().toISOString(),
     }))
