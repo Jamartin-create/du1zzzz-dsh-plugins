@@ -8,6 +8,8 @@
 |---|---|
 | [dsh-plugin-ntfy](plugins/dsh-plugin-ntfy/) | 回合/后台任务完成与失败的 ntfy 推送，`ntfy_notify` 工具，AI 标题分析与 Markdown 总结正文 |
 
+> AI agent / 贡献者请先读 [AGENTS.md](AGENTS.md)：完整的开发流程与 DSH 平台要点（坑）都在里面。
+
 ## 开发
 
 ```bash
