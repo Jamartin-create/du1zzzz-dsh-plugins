@@ -1,0 +1,7 @@
+# Bundle patch for dsh-plugin-npm. The host applies this when the plugin is
+# installed, inserting one plugin instance under the id `npm-manager`.
+# Runtime settings (registries, sync config, etc.) come from the `dsh-plugin-npm`
+# settings namespace (settings.yaml + Settings → Plugins → npm), not from here.
+- insert:
+    - id: npm-manager
+      name: dsh-plugin-npm
