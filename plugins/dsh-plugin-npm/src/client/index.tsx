@@ -1109,7 +1109,7 @@ function LocalPackagesTab() {
                           disabled={pendingId === pkg.id}
                           className="dsh-npm-btn dsh-npm-btn-primary dsh-npm-btn-sm"
                         >
-                          {pendingId === pkg.id ? '发布中...' : '发布'}
+                          {pendingId === pkg.id ? '发布中…（如弹出浏览器，请在浏览器中完成验证）' : '发布'}
                         </button>
                       )}
                       <button

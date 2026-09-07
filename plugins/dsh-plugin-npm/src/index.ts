@@ -53,7 +53,7 @@ export function apply(ctx: any) {
   }
 
   // 初始化数据源
-  const dataSource = new DataSource()
+  const dataSource = new DataSource(ctx.logger)
 
   // 初始化同步管理器
   const syncManager = new SyncManager(db, dataSource, settings, ctx.logger)
