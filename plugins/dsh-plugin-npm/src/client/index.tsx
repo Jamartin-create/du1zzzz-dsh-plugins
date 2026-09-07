@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Fragment } from 'react'
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 // react-dom 是 client bundle 的外部依赖（neverBundle），由 __ModuleLoader__ 的
@@ -62,6 +62,16 @@ interface ValidationResult {
   }
 }
 
+interface RegistryView {
+  id: string
+  name: string
+  url: string
+  scope?: string
+  isDefault: boolean
+  syncEnabled: boolean
+  hasToken: boolean
+}
+
 interface SyncResult {
   success: boolean
   registryId: string
@@ -75,6 +85,7 @@ interface PublishResult {
   version?: string
   registryId?: string
   error?: string
+  otpRequired?: boolean
 }
 
 // ========== Styles ==========
@@ -307,6 +318,77 @@ function installStyles() {
     .dsh-npm-feedback ul {
       margin: 4px 0 0;
       padding-left: 20px;
+    }
+
+    /* ---- badges (registry tab) ---- */
+    .dsh-npm-badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 17px;
+      white-space: nowrap;
+      background: var(--dsw-alias-bg-module-platform, rgba(127, 127, 127, 0.12));
+      color: var(--dsw-alias-label-secondary, #666);
+    }
+    .dsh-npm-badge.primary {
+      color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      background: color-mix(in srgb, var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5)) 10%, transparent);
+    }
+    .dsh-npm-badge.success {
+      color: var(--dsw-alias-state-success-primary, #2e7d32);
+      background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #2e7d32) 12%, transparent);
+    }
+
+    /* ---- OTP panel ---- */
+    .dsh-npm-otp-panel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      background: var(--dsw-alias-bg-layer-1, #f5f5f5);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--dsw-alias-label-secondary, #666);
+    }
+    .dsh-npm-otp-input {
+      width: 120px;
+      height: 32px;
+      box-sizing: border-box;
+      padding: 0 12px;
+      font: inherit;
+      font-size: 14px;
+      letter-spacing: 4px;
+      text-align: center;
+      border: 1px solid var(--dsw-alias-border-l2, #ccc);
+      border-radius: 8px;
+      background: var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-2, #fff));
+      color: var(--dsw-alias-label-primary, #111);
+    }
+    .dsh-npm-otp-input:focus-visible {
+      border-color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      outline: none;
+    }
+    .dsh-npm-otp-input:disabled {
+      opacity: 0.5;
+    }
+    .dsh-npm-otp-msg-error {
+      font-size: 12px;
+      color: var(--dsw-alias-state-error-primary, #c62828);
+    }
+    .dsh-npm-otp-msg-success {
+      font-size: 12px;
+      color: var(--dsw-alias-state-success-primary, #2e7d32);
+    }
+    .dsh-npm-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--dsw-alias-label-primary, #333);
     }
 
     /* ---- card / form ---- */
@@ -559,7 +641,7 @@ let directoryPicker: (() => Promise<string | null>) | null = null
 // ========== Main Component ==========
 
 function NpmManagerOverlay() {
-  const [activeTab, setActiveTab] = useState<'remote' | 'local'>('remote')
+  const [activeTab, setActiveTab] = useState<'remote' | 'local' | 'registries'>('remote')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -577,10 +659,16 @@ function NpmManagerOverlay() {
           >
             本地包
           </button>
+          <button
+            className={`dsh-npm-tab ${activeTab === 'registries' ? 'active' : ''}`}
+            onClick={() => setActiveTab('registries')}
+          >
+            注册源
+          </button>
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: '0 24px 24px' }}>
-        {activeTab === 'remote' ? <RemotePackagesTab /> : <LocalPackagesTab />}
+        {activeTab === 'remote' ? <RemotePackagesTab /> : activeTab === 'local' ? <LocalPackagesTab /> : <RegistriesTab />}
       </div>
     </div>
   )
@@ -710,6 +798,13 @@ function LocalPackagesTab() {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
+  // 预填 OTP：下次发布携带，每次尝试后清空（OTP 一次性）
+  const [prefillOtp, setPrefillOtp] = useState('')
+  // 行内 OTP 面板：otpRequired 时展开
+  const [otpFor, setOtpFor] = useState<string | null>(null)
+  const [otp, setOtp] = useState('')
+  const [otpError, setOtpError] = useState('')
+  const [otpResult, setOtpResult] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   const loadPackages = useCallback(async () => {
     setLoading(true)
@@ -812,30 +907,77 @@ function LocalPackagesTab() {
     }
   }
 
-  const handlePublish = async (id: string) => {
-    if (!confirm('确定要发布这个包吗？')) return
-
+  const doPublish = async (id: string, otpCode?: string): Promise<PublishResult | null> => {
     setPendingId(id)
     try {
-      const data = await fetchJson<PublishResult>(
+      return await fetchJson<PublishResult>(
         '/plugins/dsh-plugin-npm/packages/local/publish',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id }),
+          body: JSON.stringify({ id, otp: otpCode }),
         },
       )
-
-      if (data.success) {
-        alert(`发布成功: ${data.packageName}@${data.version}`)
-      } else {
-        alert(`发布失败: ${data.error}`)
-      }
     } catch (err: any) {
       setError(err.message)
+      return null
     } finally {
       setPendingId(null)
     }
+  }
+
+  const handlePublish = async (id: string) => {
+    if (!confirm('确定要发布这个包吗？')) return
+
+    // 首次尝试不带 OTP（除非用户预填了）；预填 OTP 一次性，尝试后清空
+    const otpCode = prefillOtp.trim() || undefined
+    if (prefillOtp) setPrefillOtp('')
+    setOtpError('')
+    setOtpResult(null)
+
+    const data = await doPublish(id, otpCode)
+    if (!data) return
+    if (data.success) {
+      setOtpFor(null)
+      await loadPackages()
+      alert(`发布成功: ${data.packageName}@${data.version}`)
+    } else if (data.otpRequired) {
+      // 需要 2FA：展开行内 OTP 输入面板
+      setOtpFor(id)
+      setOtp('')
+    } else {
+      setOtpFor(null)
+      alert(`发布失败: ${data.error}`)
+    }
+  }
+
+  const submitOtp = async (id: string, code: string) => {
+    if (pendingId === id) return
+    if (!/^\d{6}$/.test(code)) {
+      setOtpError('请输入 6 位数字验证码')
+      return
+    }
+    setOtpError('')
+    setOtpResult(null)
+
+    const data = await doPublish(id, code)
+    if (!data) return
+    if (data.success) {
+      setOtpResult({ kind: 'success', text: `发布成功: ${data.packageName}@${data.version}` })
+      await loadPackages()
+    } else if (data.otpRequired) {
+      setOtp('')
+      setOtpError('验证码无效或已过期，请重新输入')
+    } else {
+      setOtpResult({ kind: 'error', text: `发布失败: ${data.error}` })
+    }
+  }
+
+  const closeOtpPanel = () => {
+    setOtpFor(null)
+    setOtp('')
+    setOtpError('')
+    setOtpResult(null)
   }
 
   if (loading) {
@@ -846,9 +988,21 @@ function LocalPackagesTab() {
     <div>
       <div className="dsh-npm-toolbar">
         <div className="dsh-npm-count">共 {packages.length} 个本地包</div>
-        <button onClick={() => setShowAddForm(!showAddForm)} className="dsh-npm-btn dsh-npm-btn-primary">
-          {showAddForm ? '取消' : '添加本地包'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            className="dsh-npm-otp-input"
+            style={{ width: 110, letterSpacing: 2 }}
+            placeholder="OTP（可选）"
+            title="下次发布携带的一次性验证码（2FA），发布后自动清空"
+            value={prefillOtp}
+            inputMode="numeric"
+            maxLength={6}
+            onChange={(e) => setPrefillOtp(e.target.value.replace(/\D/g, ''))}
+          />
+          <button onClick={() => setShowAddForm(!showAddForm)} className="dsh-npm-btn dsh-npm-btn-primary">
+            {showAddForm ? '取消' : '添加本地包'}
+          </button>
+        </div>
       </div>
 
       {error && <div className="dsh-npm-error">{error}</div>}
@@ -928,38 +1082,364 @@ function LocalPackagesTab() {
           </thead>
           <tbody>
             {packages.map((pkg) => (
-              <tr key={pkg.id}>
-                <td>{pkg.name}</td>
-                <td>{pkg.version || '-'}</td>
-                <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pkg.path}>
-                  {pkg.path}
+              <Fragment key={pkg.id}>
+                <tr>
+                  <td>{pkg.name}</td>
+                  <td>{pkg.version || '-'}</td>
+                  <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pkg.path}>
+                    {pkg.path}
+                  </td>
+                  <td>
+                    <span className={`dsh-npm-status ${pkg.status}`}>
+                      {pkg.status === 'valid' ? '有效' : pkg.status === 'invalid' ? '无效' : '待验证'}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={() => handleValidate(pkg.id)}
+                        disabled={pendingId === pkg.id}
+                        className="dsh-npm-btn dsh-npm-btn-ghost dsh-npm-btn-sm"
+                      >
+                        {pendingId === pkg.id && otpFor !== pkg.id ? '处理中...' : '验证'}
+                      </button>
+                      {pkg.status === 'valid' && (
+                        <button
+                          onClick={() => handlePublish(pkg.id)}
+                          disabled={pendingId === pkg.id}
+                          className="dsh-npm-btn dsh-npm-btn-primary dsh-npm-btn-sm"
+                        >
+                          {pendingId === pkg.id ? '发布中...' : '发布'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDelete(pkg.id)}
+                        disabled={pendingId === pkg.id}
+                        className="dsh-npm-btn dsh-npm-btn-danger dsh-npm-btn-sm"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {otpFor === pkg.id && (
+                  <tr>
+                    <td colSpan={5}>
+                      <div className="dsh-npm-otp-panel">
+                        <span>该 registry 要求 2FA 验证码：</span>
+                        <input
+                          autoFocus
+                          className="dsh-npm-otp-input"
+                          value={otp}
+                          inputMode="numeric"
+                          maxLength={6}
+                          placeholder="6 位数字"
+                          disabled={pendingId === pkg.id}
+                          onChange={(e) => {
+                            const v = e.target.value.replace(/\D/g, '')
+                            setOtp(v)
+                            if (v.length === 6) void submitOtp(pkg.id, v)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void submitOtp(pkg.id, otp)
+                          }}
+                        />
+                        <button
+                          className="dsh-npm-btn dsh-npm-btn-primary dsh-npm-btn-sm"
+                          disabled={pendingId === pkg.id || otp.length !== 6}
+                          onClick={() => void submitOtp(pkg.id, otp)}
+                        >
+                          {pendingId === pkg.id ? '发布中...' : '确认发布'}
+                        </button>
+                        <button
+                          className="dsh-npm-btn dsh-npm-btn-ghost dsh-npm-btn-sm"
+                          disabled={pendingId === pkg.id}
+                          onClick={closeOtpPanel}
+                        >
+                          取消
+                        </button>
+                        {otpError && <span className="dsh-npm-otp-msg-error">{otpError}</span>}
+                        {otpResult && (
+                          <span className={otpResult.kind === 'success' ? 'dsh-npm-otp-msg-success' : 'dsh-npm-otp-msg-error'}>
+                            {otpResult.text}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// ========== Registries Tab ==========
+
+interface RegistryFormState {
+  name: string
+  url: string
+  scope: string
+  authToken: string
+  isDefault: boolean
+  syncEnabled: boolean
+}
+
+const EMPTY_REGISTRY_FORM: RegistryFormState = {
+  name: '',
+  url: '',
+  scope: '',
+  authToken: '',
+  isDefault: false,
+  syncEnabled: true,
+}
+
+/** 从名称生成 registry id（新建时） */
+function registryIdFromName(name: string): string {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || `registry-${Date.now()}`
+}
+
+function RegistriesTab() {
+  const [registries, setRegistries] = useState<RegistryView[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [form, setForm] = useState<RegistryFormState>(EMPTY_REGISTRY_FORM)
+  const [saving, setSaving] = useState(false)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+
+  const loadRegistries = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await fetchJson<{ registries: RegistryView[] }>(
+        '/plugins/dsh-plugin-npm/registries',
+      )
+      setRegistries(data.registries)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadRegistries()
+  }, [loadRegistries])
+
+  const openCreate = () => {
+    setEditingId(null)
+    setForm(EMPTY_REGISTRY_FORM)
+    setShowForm(true)
+    setError('')
+  }
+
+  const openEdit = (r: RegistryView) => {
+    setEditingId(r.id)
+    // authToken 留空 = 保持不变（服务器不返回原始 token）
+    setForm({
+      name: r.name,
+      url: r.url,
+      scope: r.scope ?? '',
+      authToken: '',
+      isDefault: r.isDefault,
+      syncEnabled: r.syncEnabled,
+    })
+    setShowForm(true)
+    setError('')
+  }
+
+  const handleSave = async () => {
+    if (!form.name.trim() || !form.url.trim()) {
+      setError('名称和 URL 为必填项')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await fetchJson('/plugins/dsh-plugin-npm/registries/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingId ?? registryIdFromName(form.name),
+          name: form.name.trim(),
+          url: form.url.trim(),
+          scope: form.scope.trim() || undefined,
+          authToken: form.authToken || undefined,
+          isDefault: form.isDefault,
+          syncEnabled: form.syncEnabled,
+        }),
+      })
+      setShowForm(false)
+      setEditingId(null)
+      await loadRegistries()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async (r: RegistryView) => {
+    if (!confirm(`确定要删除 registry "${r.name}" 吗？`)) return
+    setPendingId(r.id)
+    setError('')
+    try {
+      await fetchJson('/plugins/dsh-plugin-npm/registries/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: r.id }),
+      })
+      await loadRegistries()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setPendingId(null)
+    }
+  }
+
+  if (loading) {
+    return <div className="dsh-npm-empty">加载中...</div>
+  }
+
+  return (
+    <div>
+      <div className="dsh-npm-toolbar">
+        <div className="dsh-npm-count">共 {registries.length} 个 registry</div>
+        <button onClick={showForm ? () => setShowForm(false) : openCreate} className="dsh-npm-btn dsh-npm-btn-primary">
+          {showForm ? '取消' : '添加 Registry'}
+        </button>
+      </div>
+
+      {error && <div className="dsh-npm-error">{error}</div>}
+
+      {showForm && (
+        <div className="dsh-npm-card">
+          <div className="dsh-npm-form">
+            <div className="dsh-npm-form-row">
+              <label>名称</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="npmjs"
+                disabled={saving}
+              />
+            </div>
+            <div className="dsh-npm-form-row">
+              <label>URL</label>
+              <input
+                type="text"
+                value={form.url}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                placeholder="https://registry.npmjs.org/"
+                disabled={saving}
+              />
+            </div>
+            <div className="dsh-npm-form-row">
+              <label>Scope</label>
+              <input
+                type="text"
+                value={form.scope}
+                onChange={(e) => setForm({ ...form, scope: e.target.value })}
+                placeholder="@my-scope（可选）"
+                disabled={saving}
+              />
+            </div>
+            <div className="dsh-npm-form-row">
+              <label>Token</label>
+              <input
+                type="password"
+                value={form.authToken}
+                onChange={(e) => setForm({ ...form, authToken: e.target.value })}
+                placeholder={editingId ? '留空则保持不变' : 'npm_xxx（可选）'}
+                disabled={saving}
+                autoComplete="off"
+              />
+            </div>
+            <div className="dsh-npm-form-row">
+              <label></label>
+              <label className="dsh-npm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.isDefault}
+                  onChange={(e) => setForm({ ...form, isDefault: e.target.checked })}
+                  disabled={saving}
+                />
+                <span>设为默认 registry</span>
+              </label>
+              <label className="dsh-npm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.syncEnabled}
+                  onChange={(e) => setForm({ ...form, syncEnabled: e.target.checked })}
+                  disabled={saving}
+                />
+                <span>启用同步</span>
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={handleSave}
+                disabled={saving || !form.name.trim() || !form.url.trim()}
+                className="dsh-npm-btn dsh-npm-btn-primary"
+              >
+                {saving ? '保存中...' : editingId ? '保存修改' : '添加'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {registries.length === 0 ? (
+        <div className="dsh-npm-empty">
+          暂无 registry，点击"添加 Registry"开始
+        </div>
+      ) : (
+        <table className="dsh-npm-table">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>URL</th>
+              <th>Scope</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {registries.map((r) => (
+              <tr key={r.id}>
+                <td style={{ fontWeight: 500 }}>{r.name}</td>
+                <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.url}>
+                  {r.url}
                 </td>
+                <td>{r.scope || '-'}</td>
                 <td>
-                  <span className={`dsh-npm-status ${pkg.status}`}>
-                    {pkg.status === 'valid' ? '有效' : pkg.status === 'invalid' ? '无效' : '待验证'}
-                  </span>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {r.isDefault && <span className="dsh-npm-badge primary">默认</span>}
+                    <span className="dsh-npm-badge">{r.syncEnabled ? '同步开启' : '同步关闭'}</span>
+                    <span className={`dsh-npm-badge ${r.hasToken ? 'success' : ''}`}>
+                      {r.hasToken ? '已配置 token' : '未配置 token'}
+                    </span>
+                  </div>
                 </td>
                 <td>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
-                      onClick={() => handleValidate(pkg.id)}
-                      disabled={pendingId === pkg.id}
+                      onClick={() => openEdit(r)}
+                      disabled={pendingId === r.id}
                       className="dsh-npm-btn dsh-npm-btn-ghost dsh-npm-btn-sm"
                     >
-                      {pendingId === pkg.id ? '处理中...' : '验证'}
+                      编辑
                     </button>
-                    {pkg.status === 'valid' && (
-                      <button
-                        onClick={() => handlePublish(pkg.id)}
-                        disabled={pendingId === pkg.id}
-                        className="dsh-npm-btn dsh-npm-btn-primary dsh-npm-btn-sm"
-                      >
-                        {pendingId === pkg.id ? '发布中...' : '发布'}
-                      </button>
-                    )}
                     <button
-                      onClick={() => handleDelete(pkg.id)}
-                      disabled={pendingId === pkg.id}
+                      onClick={() => handleDelete(r)}
+                      disabled={pendingId === r.id}
                       className="dsh-npm-btn dsh-npm-btn-danger dsh-npm-btn-sm"
                     >
                       删除
@@ -1007,8 +1487,8 @@ function NpmSettingsSection(props: any) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Registry 配置</h3>
         <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary, #666)' }}>
-          Registry 通过 /plugins/dsh-plugin-npm/registries API 管理（存储在插件数据库中），
-          不在此处配置。
+          Registry 在 npm 包管理面板的「注册源」标签页中管理
+          （点击侧边栏的「npm 包管理」打开），不在此处配置。
         </div>
       </div>
 

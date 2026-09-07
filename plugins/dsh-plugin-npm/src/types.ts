@@ -9,6 +9,17 @@ export interface RegistryConfig {
   syncEnabled: boolean
 }
 
+/** 注册源的客户端视图：不下发原始 token，仅告知是否已配置 */
+export interface RegistryView {
+  id: string
+  name: string
+  url: string
+  scope?: string
+  isDefault: boolean
+  syncEnabled: boolean
+  hasToken: boolean
+}
+
 /** 包信息（远端） */
 export interface RemotePackage {
   name: string

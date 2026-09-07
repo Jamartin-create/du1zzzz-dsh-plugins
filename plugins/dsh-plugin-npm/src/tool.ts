@@ -318,13 +318,16 @@ export function registerTools(ctx: any, toolCtx: ToolContext) {
                 version: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                 registryId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
                 error: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                otpRequired: { oneOf: [{ type: 'boolean' }, { type: 'null' }] },
               },
             },
             render: (_args: any, value: any) =>
               textBlock(
                 value.success
                   ? `发布成功: ${value.packageName}@${value.version} (registry: ${value.registryId})`
-                  : `发布失败: ${value.error}`,
+                  : value.otpRequired
+                    ? `发布需要 OTP 验证码，请携带 otp 参数重试: ${value.error}`
+                    : `发布失败: ${value.error}`,
               ),
           },
           async execute(args: any) {
@@ -341,6 +344,7 @@ export function registerTools(ctx: any, toolCtx: ToolContext) {
                 version: result.version ?? null,
                 registryId: result.registryId ?? null,
                 error: result.error ?? null,
+                otpRequired: result.otpRequired ?? null,
               }
             } catch (error: any) {
               return {
@@ -349,6 +353,7 @@ export function registerTools(ctx: any, toolCtx: ToolContext) {
                 version: null,
                 registryId: null,
                 error: String(error.message),
+                otpRequired: null,
               }
             }
           },

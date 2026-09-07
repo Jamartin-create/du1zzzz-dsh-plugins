@@ -20,6 +20,8 @@ export interface PublishResult {
   version?: string
   registryId?: string
   error?: string
+  /** true 表示该 registry 要求 OTP（2FA），应提示用户输入验证码后重试 */
+  otpRequired?: boolean
 }
 
 export class PublishManager {
@@ -70,15 +72,19 @@ export class PublishManager {
       return {
         success: false,
         packageName: localPkg.name,
-        error: '找不到对应的 registry，请配置 authToken',
+        error: '找不到对应的 registry',
       }
     }
 
+    // 未配置 token 时依赖本机 ambient npm 登录（~/.npmrc），先 whoami 预检以快速失败
     if (!registry.authToken) {
-      return {
-        success: false,
-        packageName: localPkg.name,
-        error: `registry ${registry.name} 未配置 authToken`,
+      const loginError = await this.ensureAmbientLogin(registry)
+      if (loginError) {
+        return {
+          success: false,
+          packageName: localPkg.name,
+          error: loginError,
+        }
       }
     }
 
@@ -155,6 +161,7 @@ export class PublishManager {
         registryId: registry.id,
       }
     } catch (error: any) {
+      const otpRequired = error?.code === 'EOTP'
       publishLog.status = 'error'
       publishLog.errorMessage = error.message
       this.safeAddPublishLog(publishLog)
@@ -167,6 +174,7 @@ export class PublishManager {
         version: pkgJson.version,
         registryId: registry.id,
         error: error.message,
+        otpRequired,
       }
     } finally {
       // 清理打包产生的 tarball，避免在用户包目录中累积
@@ -192,8 +200,12 @@ export class PublishManager {
       return { success: false, error: '找不到对应的 registry' }
     }
 
+    // 未配置 token 时依赖本机 ambient npm 登录，先 whoami 预检
     if (!registry.authToken) {
-      return { success: false, error: `registry ${registry.name} 未配置 authToken` }
+      const loginError = await this.ensureAmbientLogin(registry)
+      if (loginError) {
+        return { success: false, error: loginError }
+      }
     }
 
     try {
@@ -239,6 +251,20 @@ export class PublishManager {
       this.db.addPublishLog(log)
     } catch (error: any) {
       this.logger?.warn?.('dsh-plugin-npm: 写入发布记录失败:', error.message)
+    }
+  }
+
+  /**
+   * 未配置 authToken 时，发布/取消发布依赖本机 ambient npm 登录（~/.npmrc）。
+   * 用 whoami 预检，失败时给出明确错误而不是等到 publish 才失败。
+   * 返回 null 表示已登录。
+   */
+  private async ensureAmbientLogin(registry: RegistryConfig): Promise<string | null> {
+    try {
+      await this.dataSource.getUsername({ priority: 'cli-first', registry })
+      return null
+    } catch {
+      return `registry ${registry.name} 未配置 authToken，且本机 npm 未登录（npm whoami 失败，请先 npm login 或配置 token）`
     }
   }
 }

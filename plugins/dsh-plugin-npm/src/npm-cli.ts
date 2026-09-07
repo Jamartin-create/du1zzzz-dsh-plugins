@@ -7,6 +7,15 @@ import type { NpmViewResult } from './types'
 
 const execFileAsync = promisify(execFile)
 
+/** npm 发布要求 OTP（账号/registry 启用了 2FA）时抛出，code === 'EOTP' */
+export class NpmOtpRequiredError extends Error {
+  readonly code = 'EOTP'
+  constructor(message: string) {
+    super(message)
+    this.name = 'NpmOtpRequiredError'
+  }
+}
+
 export interface NpmCliOptions {
   registry?: string
   cwd?: string
@@ -164,8 +173,9 @@ export class NpmCli {
       if (error.stderr?.includes('ENEEDAUTH')) {
         throw new Error('未登录，请先运行 npm adduser 或配置 authToken')
       }
-      if (error.stderr?.includes('EOTP')) {
-        throw new Error('需要 OTP 验证码')
+      const output = `${error.stderr ?? ''}\n${error.stdout ?? ''}`
+      if (/EOTP|one-time pass|two-factor authentication/i.test(output)) {
+        throw new NpmOtpRequiredError('需要 OTP 验证码（该 registry 对发布启用了 2FA）')
       }
       if (error.stderr?.includes('E409')) {
         throw new Error('版本已存在，请更新 version')

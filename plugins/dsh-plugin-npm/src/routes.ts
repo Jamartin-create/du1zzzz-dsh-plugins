@@ -351,7 +351,16 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
         handler: async (req: any, res: any) => {
           res.setHeader('Content-Type', 'application/json; charset=utf-8')
           try {
-            const registries = db.getRegistries()
+            // 不下发原始 token，仅告知客户端是否已配置
+            const registries = db.getRegistries().map(r => ({
+              id: r.id,
+              name: r.name,
+              url: r.url,
+              scope: r.scope,
+              isDefault: r.isDefault,
+              syncEnabled: r.syncEnabled,
+              hasToken: Boolean(r.authToken),
+            }))
             res.writeHead(200)
             res.end(JSON.stringify({ registries }))
           } catch (error: any) {
@@ -382,10 +391,24 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
               return
             }
 
+            // authToken 为空且记录已存在：保留已存储的 token（编辑场景留空 = 保持不变）
+            if (!registry.authToken) {
+              const existing = db.getRegistry(registry.id)
+              if (existing?.authToken) {
+                registry.authToken = existing.authToken
+              }
+            }
+
             db.upsertRegistry(registry)
 
+            // startAutoSync 从 db 读取 registries，重启定时器以反映变更
+            syncManager.stopAutoSync()
+            if (getConfig().autoSync.enabled) {
+              syncManager.startAutoSync()
+            }
+
             res.writeHead(200)
-            res.end(JSON.stringify({ success: true, registry }))
+            res.end(JSON.stringify({ success: true }))
           } catch (error: any) {
             res.writeHead(500)
             res.end(JSON.stringify({ error: error.message }))
@@ -396,7 +419,7 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
     )
   })
 
-  // 删除 registry
+  // 删除 registry（POST，状态变更不走 GET）
   ctx.inject(['webServer'], (wsCtx: any) => {
     wsCtx.effect(() =>
       wsCtx.webServer.register({
@@ -405,8 +428,8 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
         handler: async (req: any, res: any) => {
           res.setHeader('Content-Type', 'application/json; charset=utf-8')
           try {
-            const url = new URL(req.url ?? '/', 'http://localhost')
-            const id = url.searchParams.get('id')
+            const body = await readBody(req)
+            const { id } = JSON.parse(body)
 
             if (!id) {
               res.writeHead(400)
@@ -419,6 +442,12 @@ export function registerRoutes(ctx: any, routeCtx: RouteContext) {
               res.writeHead(404)
               res.end(JSON.stringify({ error: 'registry 不存在' }))
               return
+            }
+
+            // 重启自动同步定时器以反映 registry 变更
+            syncManager.stopAutoSync()
+            if (getConfig().autoSync.enabled) {
+              syncManager.startAutoSync()
             }
 
             res.writeHead(200)
