@@ -85,7 +85,7 @@ function installStyles() {
   const style = document.createElement('style')
   style.setAttribute('data-dsh-plugin-npm', '1')
   style.textContent = `
-    /* ---- sidebar entry (DOM-injected row) ---- */
+    /* ---- sidebar entry (DOM-injected row, mirrors the shell's nav rows) ---- */
     .dsh-npm-sidebar-entry {
       appearance: none;
       box-sizing: border-box;
@@ -93,15 +93,16 @@ function installStyles() {
       align-items: center;
       gap: 8px;
       width: 100%;
+      height: 36px;
       margin: 2px 0;
-      padding: 6px 10px;
+      padding: 0 10px;
       border: none;
       border-radius: 8px;
       background: transparent;
       color: var(--dsw-alias-label-secondary, #666);
       font: inherit;
       font-size: 13px;
-      line-height: 20px;
+      white-space: nowrap;
       text-align: left;
       cursor: pointer;
       transition: background 0.15s, color 0.15s;
@@ -111,15 +112,22 @@ function installStyles() {
       color: var(--dsw-alias-label-primary, #333);
     }
     .dsh-npm-sidebar-entry[data-active="true"] {
-      background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06));
+      background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.08));
       color: var(--dsw-alias-label-primary, #333);
       font-weight: 500;
     }
     .dsh-npm-sidebar-entry-icon {
       display: inline-flex;
+      align-items: center;
+      justify-content: center;
       flex: none;
+      width: 24px;
+      height: 24px;
+    }
+    .dsh-npm-sidebar-entry-icon svg {
       width: 18px;
       height: 18px;
+      display: block;
     }
     .dsh-npm-sidebar-entry-label {
       flex: 1;
