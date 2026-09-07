@@ -415,6 +415,15 @@ function installStyles() {
       font-size: 13px;
       color: var(--dsw-alias-label-secondary, #666);
     }
+    .dsh-npm-form-row:has(.dsh-npm-hint) {
+      flex-wrap: wrap;
+    }
+    .dsh-npm-hint {
+      flex-basis: 100%;
+      margin-left: 92px;
+      font-size: 12px;
+      color: var(--dsw-alias-label-tertiary, #999);
+    }
     .dsh-npm-form-row input {
       flex: 1;
       min-width: 0;
@@ -1352,7 +1361,7 @@ function RegistriesTab() {
               />
             </div>
             <div className="dsh-npm-form-row">
-              <label>Token</label>
+              <label>Access Token</label>
               <input
                 type="password"
                 value={form.authToken}
@@ -1361,6 +1370,9 @@ function RegistriesTab() {
                 disabled={saving}
                 autoComplete="off"
               />
+              <span className="dsh-npm-hint">
+                发布需要 Granular Access Token 并勾选 Bypass 2FA（npmjs.com → Access Tokens 创建）
+              </span>
             </div>
             <div className="dsh-npm-form-row">
               <label></label>
