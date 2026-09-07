@@ -14,8 +14,8 @@ export class DataSource {
   private cli: NpmCli
   private api: RegistryApi
 
-  constructor(logger?: any) {
-    this.cli = new NpmCli('npm', logger)
+  constructor() {
+    this.cli = new NpmCli()
     this.api = new RegistryApi()
   }
 
