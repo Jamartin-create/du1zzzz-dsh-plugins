@@ -1,10 +1,25 @@
-import { useEffect, useState, useCallback, type CSSProperties } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+
+// react-dom 是 client bundle 的外部依赖（neverBundle），由 __ModuleLoader__ 的
+// factory(require) 注入；工作区没有 @types/react-dom，这里给出最小类型。
+// tsconfig.client 未注入 node 类型，声明工厂参数 require 的最小签名。
+declare var require: (id: string) => any
+
+interface ReactDomRoot {
+  render(children: any): void
+  unmount(): void
+}
+function createOverlayRoot(container: Element): ReactDomRoot {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createRoot } = require('react-dom/client')
+  return createRoot(container)
+}
 
 /** Settings namespace owned by the Host half of this plugin. */
 const NS = 'dsh-plugin-npm'
 
-export const inject = ['slots', 'connection', 'settingsScope']
+export const inject = ['slots', 'connection', 'settingsScope', 'uiWorkspace']
 
 // ========== Types ==========
 
@@ -70,35 +85,142 @@ function installStyles() {
   const style = document.createElement('style')
   style.setAttribute('data-dsh-plugin-npm', '1')
   style.textContent = `
+    /* ---- sidebar entry (DOM-injected row) ---- */
+    .dsh-npm-sidebar-entry {
+      appearance: none;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      margin: 2px 0;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--dsw-alias-label-secondary, #666);
+      font: inherit;
+      font-size: 13px;
+      line-height: 20px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .dsh-npm-sidebar-entry:hover {
+      background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
+      color: var(--dsw-alias-label-primary, #333);
+    }
+    .dsh-npm-sidebar-entry[data-active="true"] {
+      background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06));
+      color: var(--dsw-alias-label-primary, #333);
+      font-weight: 500;
+    }
+    .dsh-npm-sidebar-entry-icon {
+      display: inline-flex;
+      flex: none;
+      width: 18px;
+      height: 18px;
+    }
+    .dsh-npm-sidebar-entry-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ---- overlay layout ---- */
     .dsh-npm-overlay {
       min-width: 800px;
       max-width: 95vw;
       min-height: 600px;
       max-height: 90vh;
     }
-    .dsh-npm-tabs {
+    .dsh-npm-toolbar {
       display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--dsw-alias-border-l2, #ddd);
+      justify-content: space-between;
+      align-items: center;
       margin-bottom: 16px;
     }
+    .dsh-npm-count {
+      font-size: 13px;
+      color: var(--dsw-alias-label-tertiary, #999);
+    }
+
+    /* ---- tabs ---- */
+    .dsh-npm-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--dsw-alias-border-l2, #ddd);
+      margin-bottom: 20px;
+    }
     .dsh-npm-tab {
-      padding: 8px 16px;
+      padding: 10px 16px;
+      margin-bottom: -1px;
       font-size: 14px;
       border: none;
       background: transparent;
       color: var(--dsw-alias-label-secondary, #666);
       cursor: pointer;
       border-bottom: 2px solid transparent;
-      transition: all 0.2s;
+      transition: color 0.15s, border-color 0.15s;
     }
     .dsh-npm-tab:hover {
       color: var(--dsw-alias-label-primary, #333);
     }
     .dsh-npm-tab.active {
-      color: var(--dsw-alias-state-business-primary, #1a6ff5);
-      border-bottom-color: var(--dsw-alias-state-business-primary, #1a6ff5);
+      color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      border-bottom-color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      font-weight: 500;
     }
+
+    /* ---- buttons ---- */
+    .dsh-npm-btn {
+      appearance: none;
+      font: inherit;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 5px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+    }
+    .dsh-npm-btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    .dsh-npm-btn-primary {
+      background: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      color: var(--dsw-alias-text-on-primary, #fff);
+    }
+    .dsh-npm-btn-primary:hover:not(:disabled) {
+      opacity: 0.88;
+    }
+    .dsh-npm-btn-ghost {
+      background: transparent;
+      border-color: var(--dsw-alias-border-l2, #ddd);
+      color: var(--dsw-alias-label-primary, #333);
+    }
+    .dsh-npm-btn-ghost:hover:not(:disabled) {
+      background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
+      border-color: var(--dsw-alias-label-dimmed, #bbb);
+    }
+    .dsh-npm-btn-danger {
+      background: transparent;
+      border-color: var(--dsw-alias-state-error-primary, #c62828);
+      color: var(--dsw-alias-state-error-primary, #c62828);
+    }
+    .dsh-npm-btn-danger:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 8%, transparent);
+    }
+    .dsh-npm-btn-sm {
+      padding: 3px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+
+    /* ---- table ---- */
     .dsh-npm-table {
       width: 100%;
       border-collapse: collapse;
@@ -110,39 +232,82 @@ function installStyles() {
       background: var(--dsw-alias-bg-layer-1, #f5f5f5);
       border-bottom: 1px solid var(--dsw-alias-border-l2, #ddd);
       font-weight: 600;
+      font-size: 12px;
       color: var(--dsw-alias-label-secondary, #666);
+      white-space: nowrap;
     }
     .dsh-npm-table td {
-      padding: 8px 12px;
+      padding: 9px 12px;
       border-bottom: 1px solid var(--dsw-alias-border-l1, #eee);
       color: var(--dsw-alias-label-primary, #333);
     }
     .dsh-npm-table tr:hover td {
-      background: var(--dsw-alias-bg-layer-2, #fafafa);
+      background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.03));
     }
+
+    /* ---- status pills ---- */
     .dsh-npm-status {
       display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 12px;
+      padding: 1px 10px;
+      border-radius: 999px;
+      font-size: 11px;
       font-weight: 500;
+      line-height: 18px;
+      white-space: nowrap;
     }
     .dsh-npm-status.valid {
-      background: #e6f7e6;
-      color: #2e7d32;
+      color: var(--dsw-alias-state-success-primary, #2e7d32);
+      background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #2e7d32) 12%, transparent);
     }
     .dsh-npm-status.invalid {
-      background: #ffeaea;
-      color: #c62828;
+      color: var(--dsw-alias-state-error-primary, #c62828);
+      background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 10%, transparent);
     }
     .dsh-npm-status.pending {
-      background: #fff3e0;
-      color: #e65100;
+      color: var(--dsw-alias-label-secondary, #666);
+      background: var(--dsw-alias-bg-module-platform, rgba(127, 127, 127, 0.12));
     }
-    .dsh-npm-empty {
-      text-align: center;
-      padding: 40px;
-      color: var(--dsw-alias-label-tertiary, #999);
+
+    /* ---- feedback boxes ---- */
+    .dsh-npm-error {
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--dsw-alias-state-error-primary, #c62828);
+      background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 20%, transparent);
+    }
+    .dsh-npm-feedback {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .dsh-npm-feedback.error {
+      color: var(--dsw-alias-state-error-primary, #c62828);
+      background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary, #c62828) 20%, transparent);
+    }
+    .dsh-npm-feedback.warning {
+      color: var(--dsw-alias-state-warn-primary, #e65100);
+      background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #e65100) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary, #e65100) 20%, transparent);
+    }
+    .dsh-npm-feedback ul {
+      margin: 4px 0 0;
+      padding-left: 20px;
+    }
+
+    /* ---- card / form ---- */
+    .dsh-npm-card {
+      border: 1px solid var(--dsw-alias-border-l2, #ddd);
+      border-radius: 12px;
+      padding: 16px;
+      background: var(--dsw-alias-bg-layer-2, #fff);
+      margin-bottom: 16px;
     }
     .dsh-npm-form {
       display: flex;
@@ -156,43 +321,42 @@ function installStyles() {
     }
     .dsh-npm-form-row label {
       min-width: 80px;
+      flex: none;
       font-size: 13px;
       color: var(--dsw-alias-label-secondary, #666);
     }
     .dsh-npm-form-row input {
       flex: 1;
-      padding: 6px 10px;
+      min-width: 0;
+      height: 34px;
+      box-sizing: border-box;
+      padding: 0 12px;
+      font: inherit;
       font-size: 13px;
+      line-height: 1.5;
       border: 1px solid var(--dsw-alias-border-l2, #ccc);
-      border-radius: 6px;
-      background: var(--dsw-alias-bg-layer-2, #fff);
+      border-radius: 8px;
+      background: var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-2, #fff));
       color: var(--dsw-alias-label-primary, #111);
+    }
+    .dsh-npm-form-row input:focus-visible {
+      border-color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5));
+      outline: none;
+    }
+    .dsh-npm-form-row input:disabled {
+      color: var(--dsw-alias-label-tertiary, #999);
+      cursor: default;
+    }
+
+    /* ---- empty state ---- */
+    .dsh-npm-empty {
+      text-align: center;
+      padding: 48px 20px;
+      font-size: 13px;
+      color: var(--dsw-alias-label-tertiary, #999);
     }
   `
   document.head.appendChild(style)
-}
-
-const primaryBtn: CSSProperties = {
-  padding: '6px 14px',
-  fontSize: 13,
-  borderRadius: 8,
-  border: '1px solid transparent',
-  background: 'var(--dsw-alias-state-business-primary, #1a6ff5)',
-  color: '#fff',
-  cursor: 'pointer',
-}
-
-const ghostBtn: CSSProperties = {
-  ...primaryBtn,
-  background: 'transparent',
-  border: '1px solid var(--dsw-alias-border-l2, #ddd)',
-  color: 'var(--dsw-alias-label-primary, #333)',
-}
-
-const dangerBtn: CSSProperties = {
-  ...ghostBtn,
-  color: '#c62828',
-  border: '1px solid #c62828',
 }
 
 // ========== API Helpers ==========
@@ -212,6 +376,178 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return data as T
 }
 
+// ========== Overlay Open State (bridges DOM row <-> React modal) ==========
+
+const overlayStore = {
+  open: false,
+  listeners: new Set<() => void>(),
+  setOpen(next: boolean) {
+    if (this.open === next) return
+    this.open = next
+    for (const listener of this.listeners) listener()
+  },
+  subscribe(listener: () => void) {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  },
+}
+
+// ========== Sidebar Entry (DOM injection, shell has no official slot) ==========
+
+const SIDEBAR_ENTRY_SELECTOR = '[data-dsh-npm-entry]'
+const FAMILY_SELECTORS = ['[data-dsh-taskboard-entry]', '[data-dsh-ssh-entry]', '[data-dsh-npm-entry]']
+
+/** Inline package/cube icon normalized to the shell's 18px navigation glyph size. */
+const SIDEBAR_ICON =
+  '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5 14 4.8v6.4L8 14.5 2 11.2V4.8L8 1.5Z"/><path d="M2 4.8 8 8l6-3.2"/><path d="M8 8v6.5"/></svg>'
+
+/** Find the sidebar shell root element, or undefined while not yet mounted. */
+function sidebarRoot(): HTMLElement | undefined {
+  const column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]')
+  if (column === null) return undefined
+  return (
+    (column.querySelector('[class*="logoRow"]')?.parentElement as HTMLElement | null) ??
+    (column.firstElementChild as HTMLElement | null) ??
+    undefined
+  )
+}
+
+/** The New Session button: nested in the logo row on current shells, a direct child on legacy shells. */
+function newSessionButton(root: HTMLElement): HTMLElement | undefined {
+  const nested = root.querySelector('button[class*="newSession"]')
+  if (nested !== null) return nested as HTMLElement
+  for (const child of Array.from(root.children)) {
+    if (child.tagName === 'BUTTON') return child as HTMLElement
+  }
+  return undefined
+}
+
+/** Re-insert the entry directly after the New Session row and any existing plugin family rows. */
+function placeEntry(root: HTMLElement, entry: HTMLElement): boolean {
+  const button = newSessionButton(root)
+  if (button === undefined) return false
+  const row = button.closest('[class*="logoRow"]')
+  const base = row !== null && row.parentElement === root ? (row as HTMLElement) : button
+  const family = Array.from(root.children).filter(
+    (el): el is HTMLElement => el instanceof HTMLElement && el.matches(FAMILY_SELECTORS.join(', ')),
+  )
+  const anchor =
+    family.length > 0 ? family[family.length - 1].nextElementSibling : base.nextElementSibling
+  if (entry.parentElement === root && entry.nextElementSibling === anchor) return true
+  root.insertBefore(entry, anchor)
+  return true
+}
+
+/**
+ * Mount the sidebar entry, waiting for the shell to render and self-healing
+ * on later React re-renders. Returns a disposer removing the row and observers.
+ */
+function mountSidebarEntry(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  if (document.querySelector(SIDEBAR_ENTRY_SELECTOR) !== null) return () => {}
+
+  const entry = document.createElement('button')
+  entry.type = 'button'
+  entry.setAttribute('data-dsh-npm-entry', '')
+  entry.className = 'dsh-npm-sidebar-entry'
+  entry.title = 'npm 包管理'
+  entry.setAttribute('aria-label', 'npm 包管理')
+  entry.innerHTML = `<span class="dsh-npm-sidebar-entry-icon">${SIDEBAR_ICON}</span><span class="dsh-npm-sidebar-entry-label">npm 包管理</span>`
+  entry.addEventListener('click', () => overlayStore.setOpen(true))
+
+  const syncActive = () => {
+    if (overlayStore.open) entry.setAttribute('data-active', 'true')
+    else entry.removeAttribute('data-active')
+  }
+  const unsubscribeActive = overlayStore.subscribe(syncActive)
+  syncActive()
+
+  let root: HTMLElement | undefined
+  let placed = false
+
+  const tryPlace = () => {
+    if (root !== undefined && !root.isConnected) {
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    if (placed && document.body.contains(entry)) return
+    if (placed) {
+      rootObserver.disconnect()
+      root = undefined
+      placed = false
+    }
+    root ??= sidebarRoot()
+    if (root === undefined) return
+    placed = placeEntry(root, entry)
+    if (placed) rootObserver.observe(root, { childList: true, subtree: true })
+  }
+
+  const waitObserver = new MutationObserver(() => {
+    tryPlace()
+  })
+  waitObserver.observe(document.body, { childList: true, subtree: true })
+
+  const rootObserver = new MutationObserver(() => {
+    if (root === undefined || !root.isConnected) {
+      placed = false
+      tryPlace()
+      return
+    }
+    if (!root.contains(entry)) placed = placeEntry(root, entry)
+  })
+
+  tryPlace()
+
+  return () => {
+    waitObserver.disconnect()
+    rootObserver.disconnect()
+    unsubscribeActive()
+    entry.remove()
+  }
+}
+
+// ========== Overlay Host (own React root; the DOM row toggles it) ==========
+
+function NpmOverlayHost() {
+  const [open, setOpen] = useState(overlayStore.open)
+
+  useEffect(() => overlayStore.subscribe(() => setOpen(overlayStore.open)), [])
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => overlayStore.setOpen(false)}
+      title="npm 包管理"
+      closeLabel="关闭"
+      className="dsh-npm-overlay"
+    >
+      <NpmManagerOverlay />
+    </Modal>
+  )
+}
+
+function mountOverlayHost(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  if (document.querySelector('[data-dsh-npm-overlay-root]') !== null) return () => {}
+  const container = document.createElement('div')
+  container.setAttribute('data-dsh-npm-overlay-root', '')
+  document.body.appendChild(container)
+  const root = createOverlayRoot(container)
+  root.render(<NpmOverlayHost />)
+  return () => {
+    root.unmount()
+    container.remove()
+  }
+}
+
+// ========== Native Directory Picker (optional uiWorkspace service) ==========
+
+/** Bound in apply() when the uiWorkspace service is available; null on web-only deployments. */
+let directoryPicker: (() => Promise<string | null>) | null = null
+
 // ========== Main Component ==========
 
 function NpmManagerOverlay() {
@@ -219,8 +555,7 @@ function NpmManagerOverlay() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: '16px 20px 0' }}>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>npm 包管理</h2>
+      <div style={{ padding: '4px 24px 0' }}>
         <div className="dsh-npm-tabs">
           <button
             className={`dsh-npm-tab ${activeTab === 'remote' ? 'active' : ''}`}
@@ -236,7 +571,7 @@ function NpmManagerOverlay() {
           </button>
         </div>
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '0 20px 20px' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 24px 24px' }}>
         {activeTab === 'remote' ? <RemotePackagesTab /> : <LocalPackagesTab />}
       </div>
     </div>
@@ -304,20 +639,14 @@ function RemotePackagesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-tertiary, #999)' }}>
-          共 {packages.length} 个包
-        </div>
-        <button onClick={handleSync} disabled={syncing} style={ghostBtn}>
+      <div className="dsh-npm-toolbar">
+        <div className="dsh-npm-count">共 {packages.length} 个包</div>
+        <button onClick={handleSync} disabled={syncing} className="dsh-npm-btn dsh-npm-btn-ghost">
           {syncing ? '同步中...' : '同步'}
         </button>
       </div>
 
-      {error && (
-        <div style={{ padding: 8, marginBottom: 12, background: '#ffeaea', borderRadius: 6, color: '#c62828', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
+      {error && <div className="dsh-npm-error">{error}</div>}
 
       {packages.length === 0 ? (
         <div className="dsh-npm-empty">
@@ -342,7 +671,7 @@ function RemotePackagesTab() {
                     href={`https://www.npmjs.com/package/${pkg.name}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{ color: 'var(--dsw-alias-state-business-primary, #1a6ff5)', textDecoration: 'none' }}
+                    style={{ color: 'var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary, #1a6ff5))', textDecoration: 'none' }}
                   >
                     {pkg.name}
                   </a>
@@ -370,6 +699,7 @@ function LocalPackagesTab() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [addPath, setAddPath] = useState('')
   const [adding, setAdding] = useState(false)
+  const [pendingId, setPendingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [validation, setValidation] = useState<ValidationResult | null>(null)
 
@@ -392,53 +722,75 @@ function LocalPackagesTab() {
     loadPackages()
   }, [loadPackages])
 
-  const handleAdd = async () => {
-    if (!addPath.trim()) return
+  const doAdd = useCallback(
+    async (path: string) => {
+      if (!path) return
 
-    setAdding(true)
-    setError('')
-    setValidation(null)
+      setAdding(true)
+      setError('')
+      setValidation(null)
 
+      try {
+        const data = await fetchJson<{ package: LocalPackage; validation: ValidationResult }>(
+          '/plugins/dsh-plugin-npm/packages/local/add',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+          },
+        )
+
+        setValidation(data.validation)
+
+        if (data.validation.valid) {
+          setShowAddForm(false)
+          setAddPath('')
+          await loadPackages()
+        }
+      } catch (err: any) {
+        // 服务器在 400 中附带完整 validation，展示具体错误/警告
+        if (err.data?.validation) {
+          setValidation(err.data.validation)
+        }
+        setError(err.message)
+      } finally {
+        setAdding(false)
+      }
+    },
+    [loadPackages],
+  )
+
+  const handleAdd = () => doAdd(addPath.trim())
+
+  const handlePickDirectory = async () => {
+    if (!directoryPicker) return
     try {
-      const data = await fetchJson<{ package: LocalPackage; validation: ValidationResult }>(
-        '/plugins/dsh-plugin-npm/packages/local/add',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: addPath.trim() }),
-        },
-      )
-
-      setValidation(data.validation)
-
-      if (data.validation.valid) {
-        setShowAddForm(false)
-        setAddPath('')
-        await loadPackages()
-      }
+      const picked = await directoryPicker()
+      if (picked === null) return // 用户取消，不视为错误
+      setAddPath(picked)
+      // 自动触发与“添加”相同的验证流程，让用户立即看到验证反馈
+      await doAdd(picked)
     } catch (err: any) {
-      // 服务器在 400 中附带完整 validation，展示具体错误/警告
-      if (err.data?.validation) {
-        setValidation(err.data.validation)
-      }
       setError(err.message)
-    } finally {
-      setAdding(false)
     }
   }
 
   const handleDelete = async (id: string) => {
     if (!confirm('确定要删除这个本地包吗？')) return
 
+    setPendingId(id)
     try {
       await fetchJson(`/plugins/dsh-plugin-npm/packages/local/delete?id=${encodeURIComponent(id)}`)
       await loadPackages()
     } catch (err: any) {
       setError(err.message)
+    } finally {
+      setPendingId(null)
     }
   }
 
   const handleValidate = async (id: string) => {
+    setPendingId(id)
     try {
       const data = await fetchJson<{ package: LocalPackage; validation: ValidationResult }>(
         `/plugins/dsh-plugin-npm/packages/local/validate?id=${encodeURIComponent(id)}`,
@@ -447,12 +799,15 @@ function LocalPackagesTab() {
       alert(data.validation.valid ? '验证通过' : `验证失败: ${data.validation.errors.join(', ')}`)
     } catch (err: any) {
       setError(err.message)
+    } finally {
+      setPendingId(null)
     }
   }
 
   const handlePublish = async (id: string) => {
     if (!confirm('确定要发布这个包吗？')) return
 
+    setPendingId(id)
     try {
       const data = await fetchJson<PublishResult>(
         '/plugins/dsh-plugin-npm/packages/local/publish',
@@ -470,6 +825,8 @@ function LocalPackagesTab() {
       }
     } catch (err: any) {
       setError(err.message)
+    } finally {
+      setPendingId(null)
     }
   }
 
@@ -479,23 +836,17 @@ function LocalPackagesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-tertiary, #999)' }}>
-          共 {packages.length} 个本地包
-        </div>
-        <button onClick={() => setShowAddForm(!showAddForm)} style={primaryBtn}>
+      <div className="dsh-npm-toolbar">
+        <div className="dsh-npm-count">共 {packages.length} 个本地包</div>
+        <button onClick={() => setShowAddForm(!showAddForm)} className="dsh-npm-btn dsh-npm-btn-primary">
           {showAddForm ? '取消' : '添加本地包'}
         </button>
       </div>
 
-      {error && (
-        <div style={{ padding: 8, marginBottom: 12, background: '#ffeaea', borderRadius: 6, color: '#c62828', fontSize: 13 }}>
-          {error}
-        </div>
-      )}
+      {error && <div className="dsh-npm-error">{error}</div>}
 
       {showAddForm && (
-        <div style={{ padding: 16, marginBottom: 16, background: 'var(--dsw-alias-bg-layer-1, #f5f5f5)', borderRadius: 8 }}>
+        <div className="dsh-npm-card">
           <div className="dsh-npm-form">
             <div className="dsh-npm-form-row">
               <label>包路径</label>
@@ -506,31 +857,45 @@ function LocalPackagesTab() {
                 placeholder="/path/to/your/package"
                 disabled={adding}
               />
+              {directoryPicker !== null && (
+                <button
+                  onClick={handlePickDirectory}
+                  disabled={adding}
+                  className="dsh-npm-btn dsh-npm-btn-ghost"
+                  style={{ flex: 'none' }}
+                >
+                  选择文件夹
+                </button>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={handleAdd} disabled={adding || !addPath.trim()} style={primaryBtn}>
+              <button
+                onClick={handleAdd}
+                disabled={adding || !addPath.trim()}
+                className="dsh-npm-btn dsh-npm-btn-primary"
+              >
                 {adding ? '添加中...' : '添加'}
               </button>
             </div>
           </div>
 
           {validation && !validation.valid && (
-            <div style={{ marginTop: 12, padding: 8, background: '#ffeaea', borderRadius: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4, color: '#c62828' }}>验证失败:</div>
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
+            <div className="dsh-npm-feedback error">
+              <div style={{ fontWeight: 600 }}>验证失败:</div>
+              <ul>
                 {validation.errors.map((err, i) => (
-                  <li key={i} style={{ color: '#c62828', fontSize: 13 }}>{err}</li>
+                  <li key={i}>{err}</li>
                 ))}
               </ul>
             </div>
           )}
 
           {validation && validation.warnings.length > 0 && (
-            <div style={{ marginTop: 8, padding: 8, background: '#fff3e0', borderRadius: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4, color: '#e65100' }}>警告:</div>
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
+            <div className="dsh-npm-feedback warning">
+              <div style={{ fontWeight: 600 }}>警告:</div>
+              <ul>
                 {validation.warnings.map((warn, i) => (
-                  <li key={i} style={{ color: '#e65100', fontSize: 13 }}>{warn}</li>
+                  <li key={i}>{warn}</li>
                 ))}
               </ul>
             </div>
@@ -567,16 +932,28 @@ function LocalPackagesTab() {
                   </span>
                 </td>
                 <td>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button onClick={() => handleValidate(pkg.id)} style={{ ...ghostBtn, padding: '4px 8px', fontSize: 12 }}>
-                      验证
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={() => handleValidate(pkg.id)}
+                      disabled={pendingId === pkg.id}
+                      className="dsh-npm-btn dsh-npm-btn-ghost dsh-npm-btn-sm"
+                    >
+                      {pendingId === pkg.id ? '处理中...' : '验证'}
                     </button>
                     {pkg.status === 'valid' && (
-                      <button onClick={() => handlePublish(pkg.id)} style={{ ...primaryBtn, padding: '4px 8px', fontSize: 12 }}>
-                        发布
+                      <button
+                        onClick={() => handlePublish(pkg.id)}
+                        disabled={pendingId === pkg.id}
+                        className="dsh-npm-btn dsh-npm-btn-primary dsh-npm-btn-sm"
+                      >
+                        {pendingId === pkg.id ? '发布中...' : '发布'}
                       </button>
                     )}
-                    <button onClick={() => handleDelete(pkg.id)} style={{ ...dangerBtn, padding: '4px 8px', fontSize: 12 }}>
+                    <button
+                      onClick={() => handleDelete(pkg.id)}
+                      disabled={pendingId === pkg.id}
+                      className="dsh-npm-btn dsh-npm-btn-danger dsh-npm-btn-sm"
+                    >
                       删除
                     </button>
                   </div>
@@ -597,14 +974,14 @@ function NpmSettingsSection(props: any) {
 
   if (snap.status === 'unavailable') {
     return (
-      <div style={{ padding: 12, fontSize: 13, color: '#888' }}>
+      <div style={{ padding: 12, fontSize: 13, color: 'var(--dsw-alias-label-tertiary, #888)' }}>
         npm settings are unavailable on this connection.
       </div>
     )
   }
 
   if (snap.status !== 'ready' || snap.value === undefined) {
-    return <div style={{ padding: 12, fontSize: 13, color: '#888' }}>Loading npm settings...</div>
+    return <div style={{ padding: 12, fontSize: 13, color: 'var(--dsw-alias-label-tertiary, #888)' }}>Loading npm settings...</div>
   }
 
   const v = snap.value
@@ -692,57 +1069,6 @@ function NpmSettingsSection(props: any) {
   )
 }
 
-// ========== Sidebar Entry Component ==========
-
-function NpmSidebarEntry() {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title="npm 包管理"
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          border: 'none',
-          background: 'transparent',
-          color: 'var(--dsw-alias-label-secondary, #666)',
-          cursor: 'pointer',
-          transition: 'all 0.2s',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-1, #f0f0f0)'
-          e.currentTarget.style.color = 'var(--dsw-alias-label-primary, #333)'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'transparent'
-          e.currentTarget.style.color = 'var(--dsw-alias-label-secondary, #666)'
-        }}
-      >
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M3 3H15V15H11V11H7V15H3V3Z" fill="currentColor" />
-          <path d="M7 7H11V11H7V7Z" fill="var(--dsw-alias-bg-layer-2, #fff)" />
-        </svg>
-      </button>
-      <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        title="npm 包管理"
-        closeLabel="关闭"
-        className="dsh-npm-overlay"
-      >
-        <NpmManagerOverlay />
-      </Modal>
-    </>
-  )
-}
-
 // ========== Utility Functions ==========
 
 function formatNumber(num: number): string {
@@ -775,6 +1101,16 @@ function formatDate(dateStr: string): string {
 export function apply(ctx: any) {
   installStyles()
 
+  // 绑定原生目录选择器（web-only 部署没有 uiWorkspace 服务时保持 null，隐藏按钮）
+  try {
+    const uiWorkspace = ctx.get?.('uiWorkspace', false)
+    if (uiWorkspace && typeof uiWorkspace.pickDirectory === 'function') {
+      directoryPicker = () => uiWorkspace.pickDirectory()
+    }
+  } catch {
+    directoryPicker = null
+  }
+
   const scope = ctx.settingsScope.bind({ namespace: NS })
   const snapshot = () => scope.getSnapshot()
   const subscribe = (listener: () => void) => scope.subscribe(listener)
@@ -796,16 +1132,15 @@ export function apply(ctx: any) {
     ),
   )
 
-  // 注册侧边栏按钮
-  ctx.slots.inject('sidebar.footer.action', () =>
-    ctx.slots.register(
-      {
-        name: 'sidebar.footer.action',
-        id: 'npm-manager',
-        order: 200,
-        label: () => 'npm',
-      },
-      NpmSidebarEntry,
-    ),
-  )
+  // 侧边栏入口：shell 没有官方 slot，通过 DOM 注入到 New Session 行下方
+  const disposers: Array<() => void> = []
+  try {
+    disposers.push(mountSidebarEntry())
+    disposers.push(mountOverlayHost())
+  } catch (error) {
+    console.error('[dsh-plugin-npm] sidebar mount failed:', error)
+  }
+  ctx.on('dispose', () => {
+    for (const dispose of disposers.splice(0)) dispose()
+  })
 }
